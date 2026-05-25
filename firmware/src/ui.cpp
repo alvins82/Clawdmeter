@@ -143,7 +143,17 @@ struct ProviderUsageWidgets {
     lv_obj_t* weekly_reset;
 };
 static ProviderUsageWidgets dual_widgets[USAGE_PROVIDER_COUNT];
-static ProviderUsageWidgets single_widgets[USAGE_PROVIDER_COUNT];
+
+struct SingleProviderUsageWidgets {
+    lv_obj_t* root;
+    lv_obj_t* session_pct;
+    lv_obj_t* session_bar;
+    lv_obj_t* session_reset;
+    lv_obj_t* weekly_pct;
+    lv_obj_t* weekly_bar;
+    lv_obj_t* weekly_reset;
+};
+static SingleProviderUsageWidgets single_widgets[USAGE_PROVIDER_COUNT];
 
 // ---- Bluetooth screen widgets ----
 static lv_obj_t* ble_container;
@@ -309,6 +319,21 @@ static void style_metric_label(lv_obj_t* lbl, const char* text) {
     lv_obj_set_style_text_color(lbl, COL_DIM, 0);
 }
 
+static lv_obj_t* make_pill(lv_obj_t* parent, const char* text) {
+    lv_obj_t* lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, L.scr_h >= 460 ? &font_styrene_28 : L.usage_name_font, 0);
+    lv_obj_set_style_text_color(lbl, COL_TEXT, 0);
+    lv_obj_set_style_bg_color(lbl, COL_BAR_BG, 0);
+    lv_obj_set_style_bg_opa(lbl, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(lbl, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_left(lbl, 16, 0);
+    lv_obj_set_style_pad_right(lbl, 16, 0);
+    lv_obj_set_style_pad_top(lbl, 6, 0);
+    lv_obj_set_style_pad_bottom(lbl, 6, 0);
+    return lbl;
+}
+
 static void make_claude_mark(lv_obj_t* panel, ProviderUsageWidgets* widgets) {
     lv_obj_t* mark = lv_obj_create(panel);
     lv_obj_set_size(mark, L.usage_icon_size, L.usage_icon_size);
@@ -342,7 +367,7 @@ static void make_codex_mark(lv_obj_t* panel, ProviderUsageWidgets* widgets) {
 
 static void make_provider_usage_panel(lv_obj_t* parent, ProviderUsageWidgets* widgets,
                                       UsageProvider provider, int y, int h,
-                                      const char* name, bool spacious) {
+                                      const char* name) {
     widgets->panel = make_panel(parent, L.margin, y, L.content_w, h);
     const int inner_w = L.content_w - 32;
 
@@ -364,45 +389,69 @@ static void make_provider_usage_panel(lv_obj_t* parent, ProviderUsageWidgets* wi
     const int gap = 14;
     const int col_w = (inner_w - gap) / 2;
     const int col2 = col_w + gap;
-    const int metric_y = spacious ? 82 : L.usage_metric_y;
-    const int pct_y = metric_y + (spacious ? 22 : 14);
-    const int bar_y = spacious ? h - 72 : L.usage_bar_y;
-    const int reset_y = spacious ? h - 50 : L.usage_reset_y;
 
     widgets->session_label = lv_label_create(widgets->panel);
     style_metric_label(widgets->session_label, "5h");
-    lv_obj_set_pos(widgets->session_label, 0, metric_y);
+    lv_obj_set_pos(widgets->session_label, 0, L.usage_metric_y);
 
     widgets->weekly_label = lv_label_create(widgets->panel);
     style_metric_label(widgets->weekly_label, "Week");
-    lv_obj_set_pos(widgets->weekly_label, col2, metric_y);
+    lv_obj_set_pos(widgets->weekly_label, col2, L.usage_metric_y);
 
     widgets->session_pct = lv_label_create(widgets->panel);
     lv_label_set_text(widgets->session_pct, "--%");
     lv_obj_set_style_text_font(widgets->session_pct, L.usage_pct_font, 0);
     lv_obj_set_style_text_color(widgets->session_pct, COL_TEXT, 0);
-    lv_obj_set_pos(widgets->session_pct, 0, pct_y);
+    lv_obj_set_pos(widgets->session_pct, 0, L.usage_metric_y + 14);
 
     widgets->weekly_pct = lv_label_create(widgets->panel);
     lv_label_set_text(widgets->weekly_pct, "--%");
     lv_obj_set_style_text_font(widgets->weekly_pct, L.usage_pct_font, 0);
     lv_obj_set_style_text_color(widgets->weekly_pct, COL_TEXT, 0);
-    lv_obj_set_pos(widgets->weekly_pct, col2, pct_y);
+    lv_obj_set_pos(widgets->weekly_pct, col2, L.usage_metric_y + 14);
 
-    widgets->session_bar = make_bar(widgets->panel, 0, bar_y, col_w, 12);
-    widgets->weekly_bar = make_bar(widgets->panel, col2, bar_y, col_w, 12);
+    widgets->session_bar = make_bar(widgets->panel, 0, L.usage_bar_y, col_w, 12);
+    widgets->weekly_bar = make_bar(widgets->panel, col2, L.usage_bar_y, col_w, 12);
 
     widgets->session_reset = lv_label_create(widgets->panel);
     lv_label_set_text(widgets->session_reset, "--");
     lv_obj_set_style_text_font(widgets->session_reset, L.usage_reset_font, 0);
     lv_obj_set_style_text_color(widgets->session_reset, COL_DIM, 0);
-    lv_obj_set_pos(widgets->session_reset, 0, reset_y);
+    lv_obj_set_pos(widgets->session_reset, 0, L.usage_reset_y);
 
     widgets->weekly_reset = lv_label_create(widgets->panel);
     lv_label_set_text(widgets->weekly_reset, "--");
     lv_obj_set_style_text_font(widgets->weekly_reset, L.usage_reset_font, 0);
     lv_obj_set_style_text_color(widgets->weekly_reset, COL_DIM, 0);
-    lv_obj_set_pos(widgets->weekly_reset, col2, reset_y);
+    lv_obj_set_pos(widgets->weekly_reset, col2, L.usage_reset_y);
+}
+
+static void make_single_metric_panel(lv_obj_t* parent, int y, const char* label,
+                                     lv_obj_t** out_pct, lv_obj_t** out_bar,
+                                     lv_obj_t** out_reset) {
+    lv_obj_t* panel = make_panel(parent, L.margin, y, L.content_w, L.usage_panel_h);
+    const int inner_w = L.content_w - 32;
+    const bool large = L.scr_h >= 460;
+    const int bar_y = large ? 56 : 50;
+    const int bar_h = large ? 24 : 18;
+    const int reset_y = large ? 94 : 84;
+
+    *out_pct = lv_label_create(panel);
+    lv_label_set_text(*out_pct, "--%");
+    lv_obj_set_style_text_font(*out_pct, L.usage_pct_font, 0);
+    lv_obj_set_style_text_color(*out_pct, COL_TEXT, 0);
+    lv_obj_set_pos(*out_pct, 0, 0);
+
+    lv_obj_t* pill = make_pill(panel, label);
+    lv_obj_align(pill, LV_ALIGN_TOP_RIGHT, 0, 1);
+
+    *out_bar = make_bar(panel, 0, bar_y, inner_w, bar_h);
+
+    *out_reset = lv_label_create(panel);
+    lv_label_set_text(*out_reset, "--");
+    lv_obj_set_style_text_font(*out_reset, L.scr_h >= 460 ? &font_styrene_28 : L.usage_name_font, 0);
+    lv_obj_set_style_text_color(*out_reset, COL_DIM, 0);
+    lv_obj_set_pos(*out_reset, 0, reset_y);
 }
 
 static lv_obj_t* make_usage_root(lv_obj_t* scr, const char* title) {
@@ -427,11 +476,11 @@ static void init_usage_screen(lv_obj_t* scr) {
     usage_dual_container = make_usage_root(scr, "Usage");
     make_provider_usage_panel(usage_dual_container, &dual_widgets[USAGE_PROVIDER_CLAUDE],
                               USAGE_PROVIDER_CLAUDE, L.content_y,
-                              L.usage_panel_h, "Claude", false);
+                              L.usage_panel_h, "Claude");
     make_provider_usage_panel(usage_dual_container, &dual_widgets[USAGE_PROVIDER_CODEX],
                               USAGE_PROVIDER_CODEX,
                               L.content_y + L.usage_panel_h + L.usage_panel_gap,
-                              L.usage_panel_h, "Codex", false);
+                              L.usage_panel_h, "Codex");
 
     lbl_anim = lv_label_create(usage_dual_container);
     lv_label_set_text(lbl_anim, "");
@@ -439,19 +488,32 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(lbl_anim, COL_ACCENT, 0);
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
 
-    const int single_y = L.content_y + (L.scr_h >= 460 ? 20 : 12);
-    const int single_h = L.scr_h - single_y - (L.scr_h >= 460 ? 86 : 78);
-
     usage_claude_container = make_usage_root(scr, "Claude");
-    make_provider_usage_panel(usage_claude_container, &single_widgets[USAGE_PROVIDER_CLAUDE],
-                              USAGE_PROVIDER_CLAUDE, single_y, single_h,
-                              "Claude", true);
+    single_widgets[USAGE_PROVIDER_CLAUDE].root = usage_claude_container;
+    make_single_metric_panel(usage_claude_container, L.content_y, "5h",
+                             &single_widgets[USAGE_PROVIDER_CLAUDE].session_pct,
+                             &single_widgets[USAGE_PROVIDER_CLAUDE].session_bar,
+                             &single_widgets[USAGE_PROVIDER_CLAUDE].session_reset);
+    make_single_metric_panel(usage_claude_container,
+                             L.content_y + L.usage_panel_h + L.usage_panel_gap,
+                             "Week",
+                             &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_pct,
+                             &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_bar,
+                             &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_reset);
     lv_obj_add_flag(usage_claude_container, LV_OBJ_FLAG_HIDDEN);
 
     usage_codex_container = make_usage_root(scr, "Codex");
-    make_provider_usage_panel(usage_codex_container, &single_widgets[USAGE_PROVIDER_CODEX],
-                              USAGE_PROVIDER_CODEX, single_y, single_h,
-                              "Codex", true);
+    single_widgets[USAGE_PROVIDER_CODEX].root = usage_codex_container;
+    make_single_metric_panel(usage_codex_container, L.content_y, "5h",
+                             &single_widgets[USAGE_PROVIDER_CODEX].session_pct,
+                             &single_widgets[USAGE_PROVIDER_CODEX].session_bar,
+                             &single_widgets[USAGE_PROVIDER_CODEX].session_reset);
+    make_single_metric_panel(usage_codex_container,
+                             L.content_y + L.usage_panel_h + L.usage_panel_gap,
+                             "Week",
+                             &single_widgets[USAGE_PROVIDER_CODEX].weekly_pct,
+                             &single_widgets[USAGE_PROVIDER_CODEX].weekly_bar,
+                             &single_widgets[USAGE_PROVIDER_CODEX].weekly_reset);
     lv_obj_add_flag(usage_codex_container, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -575,47 +637,68 @@ void ui_update(const UsageData* data) {
 
     for (int i = 0; i < USAGE_PROVIDER_COUNT; i++) {
         const ProviderUsageData* usage = &data->providers[i];
-        ProviderUsageWidgets* targets[2] = {
-            &dual_widgets[i],
-            &single_widgets[i],
-        };
+        ProviderUsageWidgets* widgets = &dual_widgets[i];
+        SingleProviderUsageWidgets* single = &single_widgets[i];
 
-        for (int j = 0; j < 2; j++) {
-            ProviderUsageWidgets* widgets = targets[j];
-            if (!widgets->panel) continue;
-            if (!usage->valid) {
-                lv_label_set_text(widgets->status, "waiting");
-                lv_obj_set_style_text_color(widgets->status, COL_DIM, 0);
-                lv_label_set_text(widgets->session_pct, "--%");
-                lv_label_set_text(widgets->weekly_pct, "--%");
-                lv_label_set_text(widgets->session_reset, "--");
-                lv_label_set_text(widgets->weekly_reset, "--");
-                lv_bar_set_value(widgets->session_bar, 0, LV_ANIM_ON);
-                lv_bar_set_value(widgets->weekly_bar, 0, LV_ANIM_ON);
-                lv_obj_set_style_bg_color(widgets->session_bar, COL_DIM, LV_PART_INDICATOR);
-                lv_obj_set_style_bg_color(widgets->weekly_bar, COL_DIM, LV_PART_INDICATOR);
-                continue;
+        if (!usage->valid) {
+            lv_label_set_text(widgets->status, "waiting");
+            lv_obj_set_style_text_color(widgets->status, COL_DIM, 0);
+            lv_label_set_text(widgets->session_pct, "--%");
+            lv_label_set_text(widgets->weekly_pct, "--%");
+            lv_label_set_text(widgets->session_reset, "--");
+            lv_label_set_text(widgets->weekly_reset, "--");
+            lv_bar_set_value(widgets->session_bar, 0, LV_ANIM_ON);
+            lv_bar_set_value(widgets->weekly_bar, 0, LV_ANIM_ON);
+            lv_obj_set_style_bg_color(widgets->session_bar, COL_DIM, LV_PART_INDICATOR);
+            lv_obj_set_style_bg_color(widgets->weekly_bar, COL_DIM, LV_PART_INDICATOR);
+
+            if (single->root) {
+                lv_label_set_text(single->session_pct, "--%");
+                lv_label_set_text(single->weekly_pct, "--%");
+                lv_label_set_text(single->session_reset, "--");
+                lv_label_set_text(single->weekly_reset, "--");
+                lv_bar_set_value(single->session_bar, 0, LV_ANIM_ON);
+                lv_bar_set_value(single->weekly_bar, 0, LV_ANIM_ON);
+                lv_obj_set_style_bg_color(single->session_bar, COL_DIM, LV_PART_INDICATOR);
+                lv_obj_set_style_bg_color(single->weekly_bar, COL_DIM, LV_PART_INDICATOR);
             }
+            continue;
+        }
 
-            int s_pct = (int)(usage->session_pct + 0.5f);
-            int w_pct = (int)(usage->weekly_pct + 0.5f);
-            lv_label_set_text_fmt(widgets->session_pct, "%d%%", s_pct);
-            lv_label_set_text_fmt(widgets->weekly_pct, "%d%%", w_pct);
-            lv_bar_set_value(widgets->session_bar, s_pct, LV_ANIM_ON);
-            lv_bar_set_value(widgets->weekly_bar, w_pct, LV_ANIM_ON);
-            lv_obj_set_style_bg_color(widgets->session_bar, pct_color(usage->session_pct),
+        int s_pct = (int)(usage->session_pct + 0.5f);
+        int w_pct = (int)(usage->weekly_pct + 0.5f);
+        lv_label_set_text_fmt(widgets->session_pct, "%d%%", s_pct);
+        lv_label_set_text_fmt(widgets->weekly_pct, "%d%%", w_pct);
+        lv_bar_set_value(widgets->session_bar, s_pct, LV_ANIM_ON);
+        lv_bar_set_value(widgets->weekly_bar, w_pct, LV_ANIM_ON);
+        lv_obj_set_style_bg_color(widgets->session_bar, pct_color(usage->session_pct),
+                                  LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(widgets->weekly_bar, pct_color(usage->weekly_pct),
+                                  LV_PART_INDICATOR);
+
+        char buf[24];
+        format_reset_short(usage->session_reset_mins, buf, sizeof(buf));
+        lv_label_set_text(widgets->session_reset, buf);
+        format_reset_short(usage->weekly_reset_mins, buf, sizeof(buf));
+        lv_label_set_text(widgets->weekly_reset, buf);
+
+        lv_label_set_text(widgets->status, usage->ok ? usage->status : "error");
+        lv_obj_set_style_text_color(widgets->status, usage->ok ? COL_GREEN : COL_RED, 0);
+
+        if (single->root) {
+            lv_label_set_text_fmt(single->session_pct, "%d%%", s_pct);
+            lv_label_set_text_fmt(single->weekly_pct, "%d%%", w_pct);
+            lv_bar_set_value(single->session_bar, s_pct, LV_ANIM_ON);
+            lv_bar_set_value(single->weekly_bar, w_pct, LV_ANIM_ON);
+            lv_obj_set_style_bg_color(single->session_bar, pct_color(usage->session_pct),
                                       LV_PART_INDICATOR);
-            lv_obj_set_style_bg_color(widgets->weekly_bar, pct_color(usage->weekly_pct),
+            lv_obj_set_style_bg_color(single->weekly_bar, pct_color(usage->weekly_pct),
                                       LV_PART_INDICATOR);
 
-            char buf[24];
             format_reset_short(usage->session_reset_mins, buf, sizeof(buf));
-            lv_label_set_text(widgets->session_reset, buf);
+            lv_label_set_text(single->session_reset, buf);
             format_reset_short(usage->weekly_reset_mins, buf, sizeof(buf));
-            lv_label_set_text(widgets->weekly_reset, buf);
-
-            lv_label_set_text(widgets->status, usage->ok ? usage->status : "error");
-            lv_obj_set_style_text_color(widgets->status, usage->ok ? COL_GREEN : COL_RED, 0);
+            lv_label_set_text(single->weekly_reset, buf);
         }
     }
 }
