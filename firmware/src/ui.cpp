@@ -152,6 +152,8 @@ static ProviderUsageWidgets dual_widgets[USAGE_PROVIDER_COUNT];
 
 struct SingleProviderUsageWidgets {
     lv_obj_t* root;
+    lv_obj_t* session_panel;
+    lv_obj_t* weekly_panel;
     lv_obj_t* session_pct;
     lv_obj_t* session_bar;
     lv_obj_t* session_reset;
@@ -497,9 +499,11 @@ static void make_provider_usage_panel(lv_obj_t* parent, ProviderUsageWidgets* wi
 }
 
 static void make_single_metric_panel(lv_obj_t* parent, int y, const char* label,
+                                     lv_obj_t** out_panel,
                                      lv_obj_t** out_pct, lv_obj_t** out_bar,
                                      lv_obj_t** out_reset) {
     lv_obj_t* panel = make_panel(parent, L.margin, y, L.content_w, L.usage_panel_h);
+    *out_panel = panel;
     const int inner_w = L.content_w - 32;
     const bool large = L.scr_h >= 460;
     const int bar_y = large ? 56 : 50;
@@ -609,12 +613,39 @@ static void update_view_state(void) {
     if (v == view_state) return;
     view_state = v;
 
+    bool show_usage = (v == 2);
+    bool show_pair = (v == 0);
+    bool show_idle = (v == 1);
+
+    // Dual provider panels (Usage screen)
+    for (int i = 0; i < USAGE_PROVIDER_COUNT; i++) {
+        lv_obj_t* panel = dual_widgets[i].panel;
+        if (panel) {
+            if (show_usage) lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
+            else            lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    // Single provider panels (Claude/Codex screens)
+    for (int i = 0; i < USAGE_PROVIDER_COUNT; i++) {
+        lv_obj_t* sp = single_widgets[i].session_panel;
+        lv_obj_t* wp = single_widgets[i].weekly_panel;
+        if (show_usage) {
+            if (sp) lv_obj_clear_flag(sp, LV_OBJ_FLAG_HIDDEN);
+            if (wp) lv_obj_clear_flag(wp, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            if (sp) lv_obj_add_flag(sp, LV_OBJ_FLAG_HIDDEN);
+            if (wp) lv_obj_add_flag(wp, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    // Pair/idle groups on all three containers
     for (int i = 0; i < 3; i++) {
         if (!pair_groups[i] || !idle_groups[i]) continue;
         lv_obj_add_flag(pair_groups[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(idle_groups[i], LV_OBJ_FLAG_HIDDEN);
-        if (v == 0) lv_obj_clear_flag(pair_groups[i], LV_OBJ_FLAG_HIDDEN);
-        if (v == 1) lv_obj_clear_flag(idle_groups[i], LV_OBJ_FLAG_HIDDEN);
+        if (show_pair) lv_obj_clear_flag(pair_groups[i], LV_OBJ_FLAG_HIDDEN);
+        if (show_idle) lv_obj_clear_flag(idle_groups[i], LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -640,12 +671,14 @@ static void init_usage_screen(lv_obj_t* scr) {
     usage_claude_container = make_usage_root(scr, "Claude");
     single_widgets[USAGE_PROVIDER_CLAUDE].root = usage_claude_container;
     make_single_metric_panel(usage_claude_container, L.content_y, "5h",
+                             &single_widgets[USAGE_PROVIDER_CLAUDE].session_panel,
                              &single_widgets[USAGE_PROVIDER_CLAUDE].session_pct,
                              &single_widgets[USAGE_PROVIDER_CLAUDE].session_bar,
                              &single_widgets[USAGE_PROVIDER_CLAUDE].session_reset);
     make_single_metric_panel(usage_claude_container,
                              L.content_y + L.usage_panel_h + L.usage_panel_gap,
                              "Week",
+                             &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_panel,
                              &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_pct,
                              &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_bar,
                              &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_reset);
@@ -664,12 +697,14 @@ static void init_usage_screen(lv_obj_t* scr) {
     usage_codex_container = make_usage_root(scr, "Codex");
     single_widgets[USAGE_PROVIDER_CODEX].root = usage_codex_container;
     make_single_metric_panel(usage_codex_container, L.content_y, "5h",
+                             &single_widgets[USAGE_PROVIDER_CODEX].session_panel,
                              &single_widgets[USAGE_PROVIDER_CODEX].session_pct,
                              &single_widgets[USAGE_PROVIDER_CODEX].session_bar,
                              &single_widgets[USAGE_PROVIDER_CODEX].session_reset);
     make_single_metric_panel(usage_codex_container,
                              L.content_y + L.usage_panel_h + L.usage_panel_gap,
                              "Week",
+                             &single_widgets[USAGE_PROVIDER_CODEX].weekly_panel,
                              &single_widgets[USAGE_PROVIDER_CODEX].weekly_pct,
                              &single_widgets[USAGE_PROVIDER_CODEX].weekly_bar,
                              &single_widgets[USAGE_PROVIDER_CODEX].weekly_reset);
