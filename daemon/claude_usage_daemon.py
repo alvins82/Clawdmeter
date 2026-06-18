@@ -195,7 +195,6 @@ async def discover_target(skip_addr: str | None = None):
         if address:
             save_address(address)  # cache only freshly-scanned addresses
     return address
-    }
 
 
 def failed_usage(status: str) -> Usage:
