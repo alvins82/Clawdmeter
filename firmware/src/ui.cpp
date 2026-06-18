@@ -128,6 +128,8 @@ static lv_obj_t* usage_dual_container;
 static lv_obj_t* usage_claude_container;
 static lv_obj_t* usage_codex_container;
 static lv_obj_t* lbl_anim;
+static lv_obj_t* lbl_anim_claude;
+static lv_obj_t* lbl_anim_codex;
 
 struct ProviderUsageWidgets {
     lv_obj_t* panel;
@@ -561,6 +563,13 @@ static void init_usage_screen(lv_obj_t* scr) {
                              &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_pct,
                              &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_bar,
                              &single_widgets[USAGE_PROVIDER_CLAUDE].weekly_reset);
+
+    lbl_anim_claude = lv_label_create(usage_claude_container);
+    lv_label_set_text(lbl_anim_claude, "");
+    lv_obj_set_style_text_font(lbl_anim_claude, &font_mono_32, 0);
+    lv_obj_set_style_text_color(lbl_anim_claude, COL_ACCENT, 0);
+    lv_obj_align(lbl_anim_claude, LV_ALIGN_BOTTOM_MID, 0, -15);
+
     lv_obj_add_flag(usage_claude_container, LV_OBJ_FLAG_HIDDEN);
 
     usage_codex_container = make_usage_root(scr, "Codex");
@@ -575,6 +584,13 @@ static void init_usage_screen(lv_obj_t* scr) {
                              &single_widgets[USAGE_PROVIDER_CODEX].weekly_pct,
                              &single_widgets[USAGE_PROVIDER_CODEX].weekly_bar,
                              &single_widgets[USAGE_PROVIDER_CODEX].weekly_reset);
+
+    lbl_anim_codex = lv_label_create(usage_codex_container);
+    lv_label_set_text(lbl_anim_codex, "");
+    lv_obj_set_style_text_font(lbl_anim_codex, &font_mono_32, 0);
+    lv_obj_set_style_text_color(lbl_anim_codex, COL_ACCENT, 0);
+    lv_obj_align(lbl_anim_codex, LV_ALIGN_BOTTOM_MID, 0, -15);
+
     lv_obj_add_flag(usage_codex_container, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -777,7 +793,9 @@ void ui_update(const UsageData* data) {
 }
 
 void ui_tick_anim(void) {
-    if (current_screen != SCREEN_USAGE) return;
+    if (current_screen != SCREEN_USAGE &&
+        current_screen != SCREEN_USAGE_CLAUDE &&
+        current_screen != SCREEN_USAGE_CODEX) return;
 
     uint32_t now = lv_tick_get();
 
@@ -792,11 +810,15 @@ void ui_tick_anim(void) {
         anim_spinner_idx = (anim_phase < SPINNER_COUNT) ? anim_phase
                                                         : (SPINNER_PHASES - anim_phase);
 
+        lv_obj_t* target = lbl_anim;
+        if (current_screen == SCREEN_USAGE_CLAUDE) target = lbl_anim_claude;
+        if (current_screen == SCREEN_USAGE_CODEX)  target = lbl_anim_codex;
+
         static char buf[80];
         snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
                  spinner_frames[anim_spinner_idx],
                  anim_messages[anim_msg_idx]);
-        lv_label_set_text(lbl_anim, buf);
+        lv_label_set_text(target, buf);
     }
 }
 
