@@ -185,6 +185,11 @@ static bool     data_received = false;
 static int      view_state = -1;  // -1 unknown / 0 pair / 1 idle / 2 usage
 static const uint32_t DATA_FRESH_MS = 90000;
 
+// Auto-rotate state
+static bool     auto_rotate_enabled = false;
+static uint32_t auto_rotate_last_ms = 0;
+#define AUTO_ROTATE_INTERVAL_MS 10000
+
 // Animation state
 static uint32_t anim_last_ms = 0;
 static uint8_t anim_spinner_idx = 0;
@@ -929,6 +934,24 @@ void ui_tick_anim(void) {
 
     uint32_t now = lv_tick_get();
 
+    // Auto-rotate between usage screens
+    if (auto_rotate_enabled &&
+        (current_screen == SCREEN_USAGE ||
+         current_screen == SCREEN_USAGE_CLAUDE ||
+         current_screen == SCREEN_USAGE_CODEX)) {
+        if (now - auto_rotate_last_ms >= AUTO_ROTATE_INTERVAL_MS) {
+            auto_rotate_last_ms = now;
+            screen_t next;
+            switch (current_screen) {
+            case SCREEN_USAGE:        next = SCREEN_USAGE_CLAUDE; break;
+            case SCREEN_USAGE_CLAUDE: next = SCREEN_USAGE_CODEX;  break;
+            case SCREEN_USAGE_CODEX:  next = SCREEN_USAGE;        break;
+            default:                  next = SCREEN_USAGE;        break;
+            }
+            ui_show_screen(next);
+        }
+    }
+
     if (now - anim_msg_start >= ANIM_MSG_MS) {
         anim_msg_idx = (anim_msg_idx + 1) % ANIM_MSG_COUNT;
         anim_msg_start = now;
@@ -999,6 +1022,7 @@ void ui_show_screen(screen_t screen) {
 
     if (screen != SCREEN_SPLASH) prev_non_splash_screen = screen;
     current_screen = screen;
+    auto_rotate_last_ms = lv_tick_get();
     apply_battery_visibility();
 }
 
@@ -1075,4 +1099,10 @@ void ui_update_battery(int percent, bool charging) {
     }
     lv_image_set_src(battery_img, &battery_dscs[idx]);
     apply_battery_visibility();
+}
+
+void ui_toggle_auto_rotate(void) {
+    auto_rotate_enabled = !auto_rotate_enabled;
+    auto_rotate_last_ms = lv_tick_get();
+    Serial.printf("Auto-rotate: %s\n", auto_rotate_enabled ? "ON" : "OFF");
 }

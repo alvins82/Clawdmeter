@@ -382,16 +382,31 @@ void loop() {
     {
         static bool primary_was = false;
         static bool primary_wake_swallowed = false;
+        static uint32_t primary_press_ms = 0;
+        static bool primary_long_handled = false;
+        #define PRIMARY_LONG_MS 1500
+
         bool primary_now = input_hal_is_held(INPUT_BTN_PRIMARY);
         if (primary_now != primary_was) {
             if (primary_now) {
+                primary_press_ms = millis();
+                primary_long_handled = false;
                 if (idle_consume_wake_press()) primary_wake_swallowed = true;
                 else                            ble_keyboard_press(0x2C, 0);  // HID Space, no mods
             } else {
                 if (primary_wake_swallowed) primary_wake_swallowed = false;
                 else                        ble_keyboard_release();
+                primary_press_ms = 0;
             }
             primary_was = primary_now;
+        }
+        // Long-press detection while held
+        if (primary_now && !primary_long_handled && primary_press_ms > 0 &&
+            !primary_wake_swallowed &&
+            (millis() - primary_press_ms) >= PRIMARY_LONG_MS) {
+            primary_long_handled = true;
+            ble_keyboard_release();  // cancel HID key
+            ui_toggle_auto_rotate();
         }
 
         if (board_caps().button_count >= 2) {
