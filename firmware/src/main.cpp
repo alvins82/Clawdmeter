@@ -412,10 +412,9 @@ void loop() {
 
         if (power_hal_pwr_pressed()) {
             if (!idle_consume_wake_press()) {
-                // On splash: cycle animations. On the usage view: cycle
-                // screen brightness (single non-splash view, no more screens).
+                // On splash: cycle animations. On other screens: cycle screens.
                 if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-                else                                          brightness_cycle();
+                else                                          ui_cycle_screen();
             }
         }
 

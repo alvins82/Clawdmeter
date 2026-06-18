@@ -250,7 +250,7 @@ static void format_reset_label(const char* reset_short, char* buf, size_t len) {
     if (strcmp(reset_short, "--") == 0) {
         snprintf(buf, len, "--");
     } else {
-        snprintf(buf, len, "Reset %s", reset_short);
+        snprintf(buf, len, "Resets in %s", reset_short);
     }
 }
 
@@ -764,7 +764,7 @@ static void update_provider_usage_widgets(ProviderUsageWidgets* dual,
     update_dual_provider_widgets(dual, usage, session_pct, weekly_pct,
                                  session_reset_label, weekly_reset_label);
     update_single_provider_widgets(single, usage, session_pct, weekly_pct,
-                                   session_reset, weekly_reset);
+                                   session_reset_label, weekly_reset_label);
 }
 
 void ui_update(const UsageData* data) {
