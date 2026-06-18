@@ -190,6 +190,11 @@ static bool     auto_rotate_enabled = false;
 static uint32_t auto_rotate_last_ms = 0;
 #define AUTO_ROTATE_INTERVAL_MS 10000
 
+// Toast banner
+static lv_obj_t* toast_label = NULL;
+static uint32_t  toast_shown_ms = 0;
+#define TOAST_DURATION_MS 2000
+
 // Animation state
 static uint32_t anim_last_ms = 0;
 static uint8_t anim_spinner_idx = 0;
@@ -830,6 +835,20 @@ void ui_init(void) {
     battery_img = lv_image_create(scr);
     lv_image_set_src(battery_img, &battery_dscs[0]);
     lv_obj_set_pos(battery_img, L.scr_w - 48 - L.margin, L.title_y);
+
+    toast_label = lv_label_create(scr);
+    lv_label_set_text(toast_label, "");
+    lv_obj_set_style_text_font(toast_label, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(toast_label, COL_TEXT, 0);
+    lv_obj_set_style_bg_color(toast_label, COL_PANEL, 0);
+    lv_obj_set_style_bg_opa(toast_label, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(toast_label, 8, 0);
+    lv_obj_set_style_pad_left(toast_label, 16, 0);
+    lv_obj_set_style_pad_right(toast_label, 16, 0);
+    lv_obj_set_style_pad_top(toast_label, 8, 0);
+    lv_obj_set_style_pad_bottom(toast_label, 8, 0);
+    lv_obj_align(toast_label, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_obj_add_flag(toast_label, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void set_usage_bar(lv_obj_t* bar, int pct, lv_color_t color) {
@@ -928,11 +947,18 @@ void ui_update(const UsageData* data) {
 }
 
 void ui_tick_anim(void) {
+    uint32_t now = lv_tick_get();
+
+    // Hide toast after duration (works on all screens)
+    if (toast_label && toast_shown_ms > 0 &&
+        (now - toast_shown_ms) >= TOAST_DURATION_MS) {
+        lv_obj_add_flag(toast_label, LV_OBJ_FLAG_HIDDEN);
+        toast_shown_ms = 0;
+    }
+
     if (current_screen != SCREEN_USAGE &&
         current_screen != SCREEN_USAGE_CLAUDE &&
         current_screen != SCREEN_USAGE_CODEX) return;
-
-    uint32_t now = lv_tick_get();
 
     // Auto-rotate between usage screens
     if (auto_rotate_enabled &&
@@ -1101,8 +1127,15 @@ void ui_update_battery(int percent, bool charging) {
     apply_battery_visibility();
 }
 
+static void ui_show_toast(const char* msg) {
+    lv_label_set_text(toast_label, msg);
+    lv_obj_clear_flag(toast_label, LV_OBJ_FLAG_HIDDEN);
+    toast_shown_ms = lv_tick_get();
+}
+
 void ui_toggle_auto_rotate(void) {
     auto_rotate_enabled = !auto_rotate_enabled;
     auto_rotate_last_ms = lv_tick_get();
+    ui_show_toast(auto_rotate_enabled ? "Auto-rotate ON" : "Auto-rotate OFF");
     Serial.printf("Auto-rotate: %s\n", auto_rotate_enabled ? "ON" : "OFF");
 }
