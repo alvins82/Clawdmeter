@@ -180,6 +180,7 @@ static lv_image_dsc_t codex_icon_dsc;
 static lv_image_dsc_t bluetooth_icon_dsc;
 static screen_t current_screen = SCREEN_USAGE;
 static bool     s_ble_connected = false;
+static uint32_t connected_at_ms = 0;   // when we last entered CONNECTED ("Connected" dwell)
 static uint32_t last_data_ms = 0;
 static bool     data_received = false;
 static int      view_state = -1;  // -1 unknown / 0 pair / 1 idle / 2 usage
@@ -591,12 +592,6 @@ static void build_idle_group(lv_obj_t* parent, int idx) {
     lv_obj_t* creature = splash_mini_create(group, "expression sleep", 160);
     lv_obj_align(creature, LV_ALIGN_TOP_MID, 0, 40);
 
-    lv_obj_t* lbl = lv_label_create(group);
-    lv_label_set_text(lbl, "Listening");
-    lv_obj_set_style_text_font(lbl, L.bt_status_font, 0);
-    lv_obj_set_style_text_color(lbl, COL_DIM, 0);
-    lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 210);
-
     lv_obj_add_flag(group, LV_OBJ_FLAG_HIDDEN);
     idle_groups[idx] = group;
 }
@@ -927,6 +922,8 @@ void ui_tick_anim(void) {
         current_screen != SCREEN_USAGE_CLAUDE &&
         current_screen != SCREEN_USAGE_CODEX) return;
 
+    update_view_state();
+
     uint32_t now = lv_tick_get();
 
     if (now - anim_msg_start >= ANIM_MSG_MS) {
@@ -944,10 +941,20 @@ void ui_tick_anim(void) {
         if (current_screen == SCREEN_USAGE_CLAUDE) target = lbl_anim_claude;
         if (current_screen == SCREEN_USAGE_CODEX)  target = lbl_anim_codex;
 
+        const char* text;
+        if (!s_ble_connected) {
+            text = "Waiting";
+        } else if (view_state == 1) {
+            text = (anim_msg_idx & 1) ? "No data" : "Listening";
+        } else if (now - connected_at_ms < 5000) {
+            text = "Connected";
+        } else {
+            text = anim_messages[anim_msg_idx];
+        }
+
         static char buf[80];
         snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
-                 spinner_frames[anim_spinner_idx],
-                 anim_messages[anim_msg_idx]);
+                 spinner_frames[anim_spinner_idx], text);
         lv_label_set_text(target, buf);
     }
 
@@ -1024,7 +1031,9 @@ screen_t ui_get_current_screen(void) {
 }
 
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {
+    bool was_connected = s_ble_connected;
     s_ble_connected = (state == BLE_STATE_CONNECTED);
+    if (s_ble_connected && !was_connected) connected_at_ms = lv_tick_get();
     update_view_state();
 
     switch (state) {
