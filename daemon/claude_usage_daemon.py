@@ -7,23 +7,22 @@ bleak (CoreBluetooth backend on macOS).
 """
 
 import asyncio
-import argparse
+import getpass
 import json
 import os
 import re
+import shutil
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
 
+import httpx
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
 
-from providers import Provider, Usage
-from providers.claude import ClaudeProvider
-from providers.codex import CodexProvider
-
-DEVICE_NAME = "Claude Controller"
+DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
@@ -32,14 +31,101 @@ POLL_INTERVAL = 60
 TICK = 5
 SCAN_TIMEOUT = 8.0
 
+# macOS: token lives in Keychain (service "Claude Code-credentials").
+# Linux: token lives in ~/.claude/.credentials.json.
+KEYCHAIN_SERVICE = "Claude Code-credentials"
+CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
-CONFIG_PATH = Path(__file__).with_name("config.toml")
-VALID_PROVIDERS = {"claude", "codex", "both"}
-DUAL_PROVIDER_KEYS = {"claude": "c", "codex": "x"}
+
+API_URL = "https://api.anthropic.com/v1/messages"
+API_HEADERS_TEMPLATE = {
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": "oauth-2025-04-20",
+    "Content-Type": "application/json",
+    "User-Agent": "claude-code/2.1.5",
+}
+API_BODY = {
+    "model": "claude-haiku-4-5-20251001",
+    "max_tokens": 1,
+    "messages": [{"role": "user", "content": "hi"}],
+}
 
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def _extract_access_token(blob: str) -> str | None:
+    """Pull the accessToken out of a credentials blob.
+
+    Claude Code stores credentials as a JSON object; the blob may also be
+    nested ({"claudeAiOauth": {"accessToken": "..."}}). Fall back to a
+    regex match so unexpected shapes still work, and finally treat the
+    blob as a raw token if nothing else matches.
+    """
+    blob = blob.strip()
+    if not blob:
+        return None
+    try:
+        data = json.loads(blob)
+    except json.JSONDecodeError:
+        data = None
+    if isinstance(data, dict):
+        # direct: {"accessToken": "..."}
+        if isinstance(data.get("accessToken"), str):
+            return data["accessToken"]
+        # nested: {"claudeAiOauth": {"accessToken": "..."}}
+        for v in data.values():
+            if isinstance(v, dict) and isinstance(v.get("accessToken"), str):
+                return v["accessToken"]
+    m = re.search(r'"accessToken"\s*:\s*"([^"]+)"', blob)
+    if m:
+        return m.group(1)
+    # Raw token (no JSON wrapper) — must look plausible (sk-ant-... etc.)
+    if re.fullmatch(r"[A-Za-z0-9_\-.~+/=]{20,}", blob):
+        return blob
+    return None
+
+
+def _read_token_keychain() -> str | None:
+    try:
+        out = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-s",
+                KEYCHAIN_SERVICE,
+                "-a",
+                getpass.getuser(),
+                "-w",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.CalledProcessError as e:
+        log(f"Keychain read failed (rc={e.returncode}): {e.stderr.strip()}")
+        return None
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log(f"Keychain access error: {e}")
+        return None
+    return _extract_access_token(out.stdout)
+
+
+def _read_token_file() -> str | None:
+    try:
+        raw = CREDENTIALS_PATH.read_text()
+    except OSError as e:
+        log(f"Error reading credentials: {e}")
+        return None
+    return _extract_access_token(raw)
+
+
+def read_token() -> str | None:
+    if sys.platform == "darwin":
+        return _read_token_keychain()
+    return _read_token_file()
 
 
 def load_cached_address() -> str | None:
@@ -70,17 +156,6 @@ async def scan_for_device() -> str | None:
             log(f"Found: {d.address}")
             return d.address
     return None
-
-
-def usage_to_payload(usage: Usage) -> dict:
-    return {
-        "s": usage.session_pct,
-        "sr": usage.session_reset_min,
-        "w": usage.weekly_pct,
-        "wr": usage.weekly_reset_min,
-        "st": usage.status,
-        "ok": usage.ok,
-    }
 
 
 # --- macOS: recover a device the OS already holds as an HID keyboard --------
@@ -114,7 +189,7 @@ async def _get_cb_manager():
 
 
 async def retrieve_connected_macos(skip_addr: str | None = None):
-    """Return a BLEDevice for a system-connected device, or None.
+    """Return a BLEDevice for a system-connected 'Clawdmeter', or None.
 
     Two-step lookup, strongest signal first:
 
@@ -197,100 +272,47 @@ async def discover_target(skip_addr: str | None = None):
     return address
 
 
-def failed_usage(status: str) -> Usage:
-    return Usage(0, 0, 0, 0, status, False)
-
-
-def single_provider_payload(provider: Provider, usage: Usage) -> dict:
-    payload = usage_to_payload(usage)
-    payload["p"] = provider.name
-    return payload
-
-
-def dual_provider_payload(usages: dict[str, Usage]) -> dict:
-    claude_usage = usages.get("claude", failed_usage("claude_missing"))
-    payload = usage_to_payload(claude_usage)
-    payload["p"] = "both"
-    for name, key in DUAL_PROVIDER_KEYS.items():
-        payload[key] = usage_to_payload(usages.get(name, failed_usage(f"{name}_missing")))
-    return payload
-
-
-def load_config_provider() -> str | None:
+async def poll_api(token: str) -> dict | None:
+    headers = dict(API_HEADERS_TEMPLATE)
+    headers["Authorization"] = f"Bearer {token}"
     try:
-        raw = CONFIG_PATH.read_text()
-    except FileNotFoundError:
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            resp = await http.post(API_URL, headers=headers, json=API_BODY)
+    except httpx.HTTPError as e:
+        log(f"API call failed: {e}")
         return None
-    except OSError as e:
-        log(f"Config read failed: {e}")
+    if resp.status_code >= 400:
+        log(f"API HTTP {resp.status_code}: {resp.text[:200]}")
         return None
-    for line in raw.splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line or not line.startswith("provider"):
-            continue
-        key, sep, value = line.partition("=")
-        if sep and key.strip() == "provider":
-            provider = value.strip().strip('"').strip("'").lower()
-            if provider in VALID_PROVIDERS:
-                return provider
-            log(f"Ignoring invalid provider in config: {provider}")
-    return None
 
+    def hdr(name: str, default: str = "0") -> str:
+        return resp.headers.get(name, default)
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Clawdmeter BLE usage daemon")
-    parser.add_argument(
-        "--provider",
-        choices=sorted(VALID_PROVIDERS),
-        help="Usage provider. Overrides CLAWDMETER_PROVIDER and daemon/config.toml.",
-    )
-    return parser.parse_args(argv)
+    now = time.time()
 
+    def reset_minutes(reset_ts: str) -> int:
+        try:
+            r = float(reset_ts)
+        except ValueError:
+            return 0
+        mins = (r - now) / 60.0
+        return int(round(mins)) if mins > 0 else 0
 
-def resolve_provider_name(args: argparse.Namespace) -> tuple[str, str]:
-    if args.provider:
-        return args.provider, "flag"
-    env_provider = os.environ.get("CLAWDMETER_PROVIDER", "").strip().lower()
-    if env_provider:
-        if env_provider in VALID_PROVIDERS:
-            return env_provider, "environment"
-        log(f"Ignoring invalid CLAWDMETER_PROVIDER={env_provider}")
-    config_provider = load_config_provider()
-    if config_provider:
-        return config_provider, "config"
-    return "claude", "default"
+    def pct(util: str) -> int:
+        try:
+            return int(round(float(util) * 100))
+        except ValueError:
+            return 0
 
-
-def build_providers(name: str) -> list[Provider]:
-    if name == "both":
-        return [ClaudeProvider(log), CodexProvider(log)]
-    if name == "codex":
-        return [CodexProvider(log)]
-    return [ClaudeProvider(log)]
-
-
-async def fetch_usage_payload(providers: list[Provider]) -> dict | None:
-    if len(providers) == 1:
-        usage = await providers[0].fetch_usage()
-        if usage is None:
-            return None
-        return single_provider_payload(providers[0], usage)
-
-    results = await asyncio.gather(
-        *(provider.fetch_usage() for provider in providers),
-        return_exceptions=True,
-    )
-    by_name: dict[str, Usage] = {}
-    for provider, result in zip(providers, results):
-        if isinstance(result, Exception):
-            log(f"{provider.name} usage fetch failed: {result}")
-            by_name[provider.name] = failed_usage(f"{provider.name}_error")
-        elif result is None:
-            by_name[provider.name] = failed_usage(f"{provider.name}_error")
-        else:
-            by_name[provider.name] = result
-
-    return dual_provider_payload(by_name)
+    payload = {
+        "s": pct(hdr("anthropic-ratelimit-unified-5h-utilization")),
+        "sr": reset_minutes(hdr("anthropic-ratelimit-unified-5h-reset")),
+        "w": pct(hdr("anthropic-ratelimit-unified-7d-utilization")),
+        "wr": reset_minutes(hdr("anthropic-ratelimit-unified-7d-reset")),
+        "st": hdr("anthropic-ratelimit-unified-5h-status", "unknown"),
+        "ok": True,
+    }
+    return payload
 
 
 class Session:
@@ -303,10 +325,22 @@ class Session:
         self.refresh_requested.set()
 
     async def setup_refresh_subscription(self) -> None:
+        # start_notify awaits CoreBluetooth's CCCD-write confirmation, which
+        # never arrives if the peripheral doesn't ACK the subscribe (a
+        # half-open link after the OS auto-connects the HID). Unbounded, that
+        # await wedges the whole daemon between "Connected" and the first poll
+        # — the device then shows nothing until a manual restart. Bound it: the
+        # subscription is only an optional device-initiated refresh nudge (we
+        # poll every POLL_INTERVAL regardless), so on timeout we proceed.
         try:
-            await self.client.start_notify(REQ_CHAR_UUID, self._on_refresh)
+            await asyncio.wait_for(
+                self.client.start_notify(REQ_CHAR_UUID, self._on_refresh),
+                timeout=10,
+            )
         except (BleakError, ValueError) as e:
             log(f"Refresh subscription unavailable: {e}")
+        except asyncio.TimeoutError:
+            log("Refresh subscription timed out; polling without it")
 
     async def write_payload(self, payload: dict) -> bool:
         data = json.dumps(payload, separators=(",", ":")).encode()
@@ -319,11 +353,92 @@ class Session:
             return False
 
 
-async def connect_and_run(
-    target,
-    stop_event: asyncio.Event,
-    providers: list[Provider],
-) -> bool:
+def _is_encryption_error(exc: BaseException) -> bool:
+    """True if a connect error is a macOS bonding/encryption mismatch.
+
+    macOS reports a stale bond as CBErrorDomain Code=15 ("Failed to encrypt
+    the connection..."). Match on the message text so we don't depend on how
+    bleak wraps the underlying CoreBluetooth error.
+    """
+    s = str(exc).lower()
+    return "code=15" in s or "encrypt" in s
+
+
+# blueutil talks to Bluetooth via IOBluetooth, which on recent macOS needs its
+# OWN Bluetooth TCC grant (separate from the daemon's CoreBluetooth grant).
+# Without it, blueutil *hangs* instead of erroring — so every call is bounded
+# by a timeout and a hang is reported as a permission problem, not a crash.
+BLUEUTIL_TIMEOUT = 8
+
+
+def _blueutil(*args: str) -> str | None:
+    """Run `blueutil <args>`, returning stdout, or None on failure/timeout.
+
+    A timeout almost always means blueutil lacks Bluetooth permission (it
+    blocks rather than failing), so we surface that cause explicitly.
+    """
+    try:
+        return subprocess.run(
+            ["blueutil", *args],
+            capture_output=True, text=True,
+            timeout=BLUEUTIL_TIMEOUT, check=True,
+        ).stdout
+    except subprocess.TimeoutExpired:
+        log(f"blueutil {' '.join(args)} timed out — it likely lacks Bluetooth "
+            "permission. Grant it under System Settings > Privacy & Security > "
+            "Bluetooth (run `blueutil --paired` once from Terminal to prompt).")
+        return None
+    except (subprocess.SubprocessError, OSError) as e:
+        log(f"blueutil {' '.join(args)} failed: {e}")
+        return None
+
+
+def unpair_macos() -> bool:
+    """Forget a stale macOS bond for DEVICE_NAME so the device can re-pair.
+
+    A Code=15 "failed to encrypt" connect error means macOS holds bonding
+    keys that no longer match the ESP32's (e.g. after a firmware reflash or
+    the on-device bond-clear gesture). The firmware pairs "just works" (no
+    MITM), so once the stale bond is gone the next connect re-bonds silently
+    with no GUI prompt.
+
+    CoreBluetooth exposes no unpair API, so we shell out to `blueutil`. The
+    daemon only knows the peripheral's CoreBluetooth UUID, not the BD_ADDR
+    that blueutil needs, so we map by name via `blueutil --paired`. Returns
+    True if a bond was removed. Mirrors the Linux daemon's `bluetoothctl
+    remove` self-heal.
+    """
+    if not shutil.which("blueutil"):
+        log("Stale bond detected but `blueutil` is not installed; cannot "
+            "auto-recover. Run `brew install blueutil`, or forget "
+            f"'{DEVICE_NAME}' in System Settings > Bluetooth and reconnect.")
+        return False
+
+    out = _blueutil("--paired")
+    if out is None:
+        return False
+
+    # Each line looks like:
+    #   address: 28-84-85-55-5c-3d, ... name: "Clawdmeter", ...
+    addr = None
+    for line in out.splitlines():
+        if f'name: "{DEVICE_NAME}"' in line:
+            m = re.search(r"address:\s*([0-9a-fA-F:-]+)", line)
+            if m:
+                addr = m.group(1)
+                break
+    if not addr:
+        log(f"No paired '{DEVICE_NAME}' found to unpair (already forgotten?)")
+        return False
+
+    if _blueutil("--unpair", addr) is None:
+        return False
+    log(f"Unpaired stale bond for '{DEVICE_NAME}' [{addr}]; re-pairing on "
+        "next connect")
+    return True
+
+
+async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     """Connect to a target and poll until disconnected or stopped.
 
     ``target`` is either an address string (Linux) or a BLEDevice carrying
@@ -338,6 +453,9 @@ async def connect_and_run(
         await client.connect()
     except (BleakError, asyncio.TimeoutError) as e:
         log(f"Connection failed: {e}")
+        if sys.platform == "darwin" and _is_encryption_error(e):
+            log("Encryption failed — likely a stale macOS bond; self-healing")
+            unpair_macos()
         return False
 
     if not client.is_connected:
@@ -356,10 +474,15 @@ async def connect_and_run(
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
-                payload = await fetch_usage_payload(providers)
-                if payload is not None and await session.write_payload(payload):
-                    last_poll = time.time()
-                    used_successfully = True
+                token = read_token()
+                if not token:
+                    log("No token; skipping poll")
+                else:
+                    payload = await poll_api(token)
+                    if payload is not None:
+                        if await session.write_payload(payload):
+                            last_poll = time.time()
+                            used_successfully = True
 
             try:
                 await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
@@ -375,8 +498,7 @@ async def connect_and_run(
     return used_successfully
 
 
-async def main(argv: list[str] | None = None) -> None:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+async def main() -> None:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -390,11 +512,7 @@ async def main(argv: list[str] | None = None) -> None:
         except NotImplementedError:
             signal.signal(sig, _stop)
 
-    provider_name, provider_source = resolve_provider_name(args)
-    providers = build_providers(provider_name)
-
-    log("=== Clawdmeter Usage Tracker Daemon (BLE, macOS) ===")
-    log(f"Provider: {provider_name} ({provider_source})")
+    log("=== Claude Usage Tracker Daemon (BLE, macOS) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
 
     backoff = 1
@@ -414,7 +532,7 @@ async def main(argv: list[str] | None = None) -> None:
             continue
 
         addr = target if isinstance(target, str) else target.address
-        ok = await connect_and_run(target, stop_event, providers)
+        ok = await connect_and_run(target, stop_event)
         if not ok:
             if sys.platform == "darwin":
                 # No string cache to drop; instead skip this stale handle on
